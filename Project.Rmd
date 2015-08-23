@@ -1,0 +1,126 @@
+---
+title: "Predictions on whether Weight Lifting Exercises were done correctly"
+author: "seemingli"
+date: "23 August 2015"
+output: html_document
+---
+#
+#### Background
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, we would use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants who were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information on the Weight Lifting Exercise Dataset is available from the website here: http://groupware.les.inf.puc-rio.br/har [^1]. We would then predict the manner in which they did the exercise by building a random forest model and use the prediction model to predict 20 different test cases. 
+
+# 
+#### Data & R Packages
+
+The training data for this project are available here: 
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test cases are available here: 
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+For this project, the following R packages will be used:
+
+* dplyr
+
+* caret
+
+* ggplot2
+
+* randomForest
+
+* doParallel
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE}
+# Use 2 cores to speed up processing
+library(doParallel)
+registerDoParallel(cores=2)
+
+# Set working directory
+setwd("~/R/Practical Machine Learning")
+
+# Load packages that will be used in the project
+library(dplyr)
+library(caret)
+library(ggplot2)
+library(randomForest)
+```
+#
+#### Pre-processing of Data
+As there were 160 variables in the dataset, we looked at the data to see if there were variables we could remove without affecting prediction accuracy. We noticed many columns with >90% NAs or blanks which were likely to be summary indicators, e.g. variables which start with "min". We also noticed that the first 7 columns were identifiers which were not necessary in the training model, e.g. "user_name". Removing these columns, we were left with 53 variables in the dataset. 
+```{r}
+# Read training data
+df<-read.csv("pml-training.csv")
+# sum no. of NAs or blanks in columns
+colSums(is.na(df)|df=="") 
+# remove columns with many NAs or blanks
+df2<-select(df, -matches('^min|max|avg|stddev|var|amplitude|avg|skewness|kurtosis')) 
+# remove identifier columns
+df3<-df2[,8:60]
+dim(df3)
+```
+#
+#### Creation of training and test sets 
+The data is then split into 60% training & 40% test sets using the createDataPartition function of the caret package.
+```{r}
+inTrain<-createDataPartition(y=df3$classe,p=0.6,list=FALSE)
+training<-df3[inTrain,]
+test<-df3[-inTrain,]
+```
+#
+#### Random Forest Prediction Model using caret package
+The prediction model will be built using Random Forest in the caret package train function as Random Forest gives relatively high accuracy even though the training time may be longer than other classifier models. Due to speed considerations, we would use 5-folds cross-validation resampling method instead of the caret defaults.
+```{r}
+my_model_file <- "my_model_file_v04.Rds"
+set.seed(543)
+if (file.exists(my_model_file)) {
+  # Read the model in and assign it to a variable.
+  modFit <- readRDS(my_model_file)
+} else {
+  # Otherwise, run the training
+  modFit <- train(classe~ .,data=training,method="rf",trControl=trainControl(method="cv",number=5),
+                  prox=TRUE,allowParallel=TRUE)
+}
+modFit
+```
+From the above, we could see that caret has automatically picked 2 predictors (mtry=2) to split the trees as it was the most accurate (98.9%) under cross validation. Caret had also tried the split by 27 and 52 predicators and for the training set, the accuracy were also high at 98.6% and 97.9% respectively. As long as the training set isn't too fundamentally different from the test set, we should expect that our accuracy on the test set should be around 98% as well.
+
+```{r}
+modFit$finalModel
+```
+By calling the finalModel as above, we can see the confusion matrix which shows the classification errors and that the in sample error rate is 0.87%. The error rate by number of predictors and the top 30 predictors by variable importance have also been plotted below.
+```{r}
+plot(modFit,main="Accuracy by number of Randomly Selected Predictors")
+plot(varImp(modFit),top=30,main="Top 30 Predictors by Variable Importance")
+```
+
+#
+#### Cross Validation of the Prediction Model
+Next, we run the prediction on the remaining 40% test dataset using the predict function in the caret package. We've compiled a table below on whether the observations in the test dataset were classified correctly.
+```{r}
+predtest <- predict(modFit,test)
+test$predRight <- predtest==test$classe
+table(predtest,test$classe)
+missClass = function(values, prediction) {
+    sum(prediction != values)/length(values)
+}
+errRate = round(missClass(test$classe, predtest)*100,3)
+```
+As we can see, only a small number of obsevations were misclassified & the expected out of sample error with the test dataset is `r errRate`%.
+
+#
+#### Prediction on Test Cases
+Lastly, we run the prediction on the 20 test cases to obtain text files that will be used for submission.
+``` {r}
+testing=read.csv("pml-testing.csv")
+pred <- predict(modFit,testing)
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    if (i < 10 ) filename = paste0("problem_id_","0",i,".txt")
+    else  filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+pml_write_files(pred)
+```
+[^1]: 
+*Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.*
